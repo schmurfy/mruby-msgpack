@@ -72,17 +72,17 @@ mrb_value load(mrb_state* M, char const*& src, char const* end) {
     case 0xCC: return mrb_fixnum_value(uint8_t (read_int<uint8_t >(M, src, end)));
     case 0xCD: return mrb_fixnum_value(uint16_t(read_int<uint16_t>(M, src, end)));
 #ifndef MRB_INT16
-    case 0xCE: return mrb_fixnum_value(uint32_t(read_int<uint32_t>(M, src, end)));
 #  ifdef MRB_INT64
+    case 0xCE: return mrb_fixnum_value(uint32_t(read_int<uint32_t>(M, src, end)));
     case 0xCF: return mrb_fixnum_value(uint64_t(read_int<uint64_t>(M, src, end)));
 #  endif
 #endif
-    case 0xD0: return mrb_fixnum_value(int8_t (read_int<uint8_t >(M, src, end)));
-    case 0xD1: return mrb_fixnum_value(int16_t(read_int<uint16_t>(M, src, end)));
+    case 0xD0: return mrb_fixnum_value(int8_t (read_int<int8_t >(M, src, end)));
+    case 0xD1: return mrb_fixnum_value(int16_t(read_int<int16_t>(M, src, end)));
 #ifndef MRB_INT16
-    case 0xD2: return mrb_fixnum_value(int32_t(read_int<uint32_t>(M, src, end)));
+    case 0xD2: return mrb_fixnum_value(int32_t(read_int<int32_t>(M, src, end)));
 #  ifdef MRB_INT64
-    case 0xD3: return mrb_fixnum_value(int64_t(read_int<uint64_t>(M, src, end)));
+    case 0xD3: return mrb_fixnum_value(int64_t(read_int<int64_t>(M, src, end)));
 #  endif
 #endif
 
@@ -94,13 +94,14 @@ mrb_value load(mrb_state* M, char const*& src, char const* end) {
     case 0xDF: return read_map(M, src, end, read_int<uint32_t>(M, src, end));
 
     default:
-      return
-          (0 <= tag and tag <= 0x7f)? mrb_fixnum_value(tag):
-          (0x80 <= tag and tag <= 0x8F)? read_map(M, src, end, tag & 0x0f):
-          (0x90 <= tag and tag <= 0x9F)? read_array(M, src, end, tag & 0x0f):
-          (0xA0 <= tag and tag <= 0xBf)? read_raw(M, src, end, tag & 0x1f):
-          (0xE0 <= tag and tag <= 0xff)? mrb_fixnum_value(~0xff | tag):
-          (not_impl(M, "unsupported type tag: %S", mrb_fixnum_value(tag)), mrb_nil_value());
+      if( tag <= 0x7f )                       return mrb_fixnum_value(tag);
+      else if (0x80 <= tag and tag <= 0x8F)   return read_map(M, src, end, tag & 0x0f);
+      else if (0x90 <= tag and tag <= 0x9F)   return read_array(M, src, end, tag & 0x0f);
+      else if (0xA0 <= tag and tag <= 0xBf)   return read_raw(M, src, end, tag & 0x1f);
+      else if (0xE0 <= tag )                  return mrb_fixnum_value(~0xff | tag);
+      else
+        return (not_impl(M, "unsupported type tag: %S", mrb_fixnum_value(tag)), mrb_nil_value());
+      
   }
 }
 
@@ -147,39 +148,45 @@ mrb_value const& dump(mrb_state* M, mrb_value const& out, mrb_value const& v) {
     case MRB_TT_FALSE: return write_tag<0xC2>(M, out);
     case MRB_TT_TRUE : return write_tag<0xC3>(M, out);
 
-#define PP_write_int(tag, type) \
-      check_min_max_of_type(num, type)? write_int_with_tag<tag, type>(M, out, num):
 #define range_error                                                     \
       (mrb_raisef(M, mrb_class_get(M, "RangeError"),                    \
                   "integer out of range: %S", mrb_fixnum_value(num)), out)
 
     case MRB_TT_FIXNUM: {
       mrb_int const num = mrb_fixnum(v);
-      return
-          (-32 <= num and num <= 0x7f)? write_int<uint8_t>(M, out, num & 0xff):
-          (num >= 0)? (
-              PP_write_int(0xCC, uint8_t)
-              PP_write_int(0xCD, uint16_t)
+      
+      if( num >= 0 ){
+        //positive numbers
+        if( num <= 0x7f )             write_int<uint8_t>(M, out, num);
+        else if( num <= UINT8_MAX )   write_int_with_tag<0xCC, uint8_t>(M, out, num);
+        else if( num <= UINT16_MAX )  write_int_with_tag<0xCD, uint16_t>(M, out, num);
 #ifndef MRB_INT16
-              PP_write_int(0xCE, uint32_t)
-#  ifdef MRB_INT64
-              PP_write_int(0xCF, uint64_t)
-#  endif
-#endif
-              range_error):
-          PP_write_int(0xD0, int8_t)
-          PP_write_int(0xD1, int16_t)
-#ifndef MRB_INT16
-          PP_write_int(0xD2, int32_t)
-#  ifdef MRB_INT64
-          PP_write_int(0xD3, int64_t)
-#  endif
-#endif
+  #ifdef MRB_INT64
+        else if( num <= UINT32_MAX )  write_int_with_tag<0xCE, uint32_t>(M, out, num);
+  #endif
+        else
           range_error;
+#endif
+      }
+      else {
+        // negative numbers
+        if( num >= -32 )              write_int<int8_t>(M, out, num);
+        else if( num >= INT8_MIN )    write_int_with_tag<0xD0, int8_t>(M, out, num);
+        else if( num >= INT16_MIN )   write_int_with_tag<0xD1, int16_t>(M, out, num);
+#ifndef MRB_INT16
+        else if( num >= INT32_MIN )   write_int_with_tag<0xD2, int32_t>(M, out, num);
+  #ifdef MRB_INT64
+        else if( num >= INT64_MIN )   write_int_with_tag<0xD3, int64_t>(M, out, num);
+  #endif
+        else
+          range_error;
+#endif
+      }
+      
+      return out;
     }
 
 #undef range_error
-#undef PP_write_int
 
     case MRB_TT_FLOAT: {
       mrb_float num = mrb_float(v);
@@ -194,14 +201,14 @@ mrb_value const& dump(mrb_state* M, mrb_value const& out, mrb_value const& v) {
 
     case MRB_TT_ARRAY:
       write_tag_with_fix<0x90, 0x10, 0xDC>(M, out, RARRAY_LEN(v));
-      for(size_t i = 0; i < RARRAY_LEN(v); ++i) { dump(M, out, RARRAY_PTR(v)[i]); }
+      for(mrb_int i = 0; i < RARRAY_LEN(v); ++i) { dump(M, out, RARRAY_PTR(v)[i]); }
       return out;
 
     case MRB_TT_HASH: {
       mrb_value const keys = mrb_hash_keys(M, v);
       mrb_funcall_argv(M, keys, mrb_intern(M, "sort!"), 0, NULL);
       write_tag_with_fix<0x80, 0x10, 0xDE>(M, out, RARRAY_LEN(keys));
-      for(size_t i = 0; i < RARRAY_LEN(keys); ++i) {
+      for(mrb_int i = 0; i < RARRAY_LEN(keys); ++i) {
         dump(M, out, RARRAY_PTR(keys)[i]);
         dump(M, out, mrb_hash_get(M, v, RARRAY_PTR(keys)[i]));
       }
